@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: fnb_db
+    environment:
+      POSTGRES_DB: fnb_ops
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      TZ: Asia/Ho_Chi_Minh
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./database:/docker-entrypoint-initdb.d:ro
+      - fnb_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fnb_ops"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build: ./backend
+    container_name: fnb_app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://fnb_app_user:CHANGE_THIS_STRONG_PASSWORD@db:5432/fnb_ops
+      ADMIN_DATABASE_URL: postgres://postgres:postgres@db:5432/fnb_ops
+      JWT_SECRET: change-me-in-production
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app/frontend:ro
+      - ./database:/app/database:ro
+
+volumes:
+  fnb_pgdata:

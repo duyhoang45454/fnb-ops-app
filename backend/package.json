@@ -1,0 +1,14 @@
+{
+  "name": "fnb-ops-backend",
+  "version": "1.0.0",
+  "description": "BrewGuard F&B anti-loss operations backend (Express + PostgreSQL)",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.3"
+  }
+}

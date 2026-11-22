@@ -1,0 +1,1354 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BrewGuard F&B — Quản lý Kho FEFO, BOM Động, RBAC & Đối soát EOD</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap');
+    body { font-family: 'Be Vietnam Pro', system-ui, -apple-system, sans-serif; }
+    .tab-active { background: rgba(245, 158, 11, 0.16); color: #fbbf24; border-right: 3px solid #f59e0b; }
+    .custom-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+    .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+    .toast-enter { animation: slideIn 0.25s ease-out; }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 h-screen flex overflow-hidden">
+
+  <!-- SIDEBAR -->
+  <aside class="w-64 bg-slate-900 text-slate-300 flex flex-col shrink-0 select-none">
+    <div class="px-5 py-5 border-b border-slate-800 flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-amber-500 text-slate-950 flex items-center justify-center font-bold text-lg shadow">
+        <i data-lucide="coffee" class="w-5 h-5"></i>
+      </div>
+      <div>
+        <div class="text-white font-bold tracking-tight leading-tight">BrewGuard F&B</div>
+        <div class="text-[11px] text-amber-400 font-medium">FEFO • BOM • RBAC • EOD</div>
+      </div>
+    </div>
+
+    <nav id="sidebar-nav" class="flex-1 py-4 space-y-1 overflow-y-auto custom-scroll"></nav>
+
+    <div class="p-4 border-t border-slate-800 bg-slate-950/60">
+      <div class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold mb-1.5">Giả lập vai trò (RBAC Live)</div>
+      <select id="role-switcher" class="w-full bg-slate-800 border border-slate-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-amber-500">
+        <option value="OWNER">👑 Chủ quán (Toàn quyền)</option>
+        <option value="MANAGER">🛡️ Quản lý ca (Ẩn giá + PIN)</option>
+        <option value="CASHIER">💳 Thu ngân (POS + Két mù)</option>
+        <option value="BARISTA">🧋 Barista (SOP + Báo hủy)</option>
+      </select>
+      <div id="role-hint" class="text-[11px] text-slate-400 mt-2 leading-snug"></div>
+    </div>
+  </aside>
+
+  <!-- MAIN AREA -->
+  <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
+    <!-- TOP BAR -->
+    <header class="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between shrink-0">
+      <div class="flex items-center gap-3">
+        <h1 id="page-title" class="text-lg font-bold text-slate-900">Tổng quan Vận hành</h1>
+        <span id="role-badge" class="text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-100 text-amber-800"></span>
+      </div>
+      <div class="flex items-center gap-4 text-sm">
+        <div class="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span class="font-medium">Ca Chiều: Đang mở</span>
+        </div>
+        <button onclick="resetDemoData()" class="text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-100 text-slate-700 flex items-center gap-1.5">
+          <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Nạp lại Seed Data
+        </button>
+      </div>
+    </header>
+
+    <!-- CONTENT CONTAINER -->
+    <main id="main-content" class="flex-1 overflow-y-auto p-6 custom-scroll"></main>
+  </div>
+
+  <!-- TOAST CONTAINER -->
+  <div id="toast-container" class="fixed bottom-5 right-5 z-50 space-y-2 max-w-sm"></div>
+
+  <!-- MODAL CONTAINER -->
+  <div id="modal-backdrop" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-40 hidden items-center justify-center p-4">
+    <div id="modal-box" class="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden"></div>
+  </div>
+
+  <script>
+    // =========================================================================
+    // 1. KHỞI TẠO TRẠNG THÁI (KHỚP 100% VỚI SEED DATA TRONG FILE .MD)
+    // =========================================================================
+    const ROLES = {
+      OWNER:   { name: 'Nguyễn Minh Chủ',  label: 'Chủ quán',   badge: 'bg-amber-100 text-amber-900',   pin: '9999', hint: 'Toàn quyền: xem COGS, sửa BOM, xem chênh lệch EOD & Audit Log.' },
+      MANAGER: { name: 'Trần Lan Quản Lý', label: 'Quản lý ca', badge: 'bg-blue-100 text-blue-900',     pin: '2468', hint: 'Ẩn giá vốn & kiểm kho mù. Mã PIN duyệt tại quầy: 2468.' },
+      CASHIER: { name: 'Lê Huy Thu Ngân',  label: 'Thu ngân',   badge: 'bg-emerald-100 text-emerald-900',pin: '1111', hint: 'Chỉ bán POS & chốt két mù. Hủy đơn đã in tem cần PIN Quản lý.' },
+      BARISTA: { name: 'Phạm An Barista',  label: 'Barista',    badge: 'bg-purple-100 text-purple-900', pin: '2222', hint: 'Xem SOP, nấu bán thành phẩm, báo hủy kèm ảnh & kiểm kho mù.' }
+    };
+
+    const NAV_ITEMS = [
+      { id: 'dashboard', label: 'Tổng quan Chủ quán', icon: 'layout-dashboard', roles: ['OWNER'] },
+      { id: 'pos',       label: 'Bán hàng POS & BOM', icon: 'shopping-bag',     roles: ['OWNER', 'MANAGER', 'CASHIER'] },
+      { id: 'inventory', label: 'Kho FEFO & Sổ cái',  icon: 'boxes',            roles: ['OWNER', 'MANAGER', 'BARISTA'] },
+      { id: 'bom',       label: 'Công thức & SOP',    icon: 'book-open',        roles: ['OWNER', 'MANAGER', 'BARISTA'] },
+      { id: 'eod',       label: 'Đối soát EOD (Mù)',  icon: 'scale',            roles: ['OWNER', 'MANAGER', 'BARISTA'] },
+      { id: 'hr',        label: 'Nhân sự & Audit Log',icon: 'shield-check',     roles: ['OWNER', 'MANAGER', 'CASHIER', 'BARISTA'] }
+    ];
+
+    let state = {};
+
+    function buildInitialState() {
+      const now = Date.now();
+      const H = 3600 * 1000;
+      const D = 24 * H;
+      return {
+        currentRole: 'OWNER',
+        currentTab: 'pos',
+        inventoryItems: [
+          { id: 'MILK-FRESH',  name: 'Sữa tươi thanh trùng',   type: 'RAW',           abc: 'A', unit: 'ml',  tareG: 45,  minStock: 1000, avgCost: 32.5, packName: 'Hộp 1L', packFactor: 1000 },
+          { id: 'SUGAR-SYRUP', name: 'Siro đường nước',        type: 'RAW',           abc: 'B', unit: 'ml',  tareG: 60,  minStock: 500,  avgCost: 25,   packName: 'Chai 1L', packFactor: 1000 },
+          { id: 'PREP-TEA',    name: 'Cốt hồng trà ủ sẵn',     type: 'SEMI_FINISHED', abc: 'A', unit: 'ml',  tareG: 180, minStock: 1000, avgCost: 8.5,  packName: 'Bình 1L', packFactor: 1000 },
+          { id: 'PREP-PEARL',  name: 'Trân châu đen đã nấu',   type: 'SEMI_FINISHED', abc: 'A', unit: 'g',   tareG: 220, minStock: 300,  avgCost: 45,   packName: 'Hộp 1kg', packFactor: 1000 },
+          { id: 'CUP-500ML',   name: 'Ly nhựa 500ml (Size M)', type: 'PACKAGING',     abc: 'A', unit: 'pcs', tareG: 0,   minStock: 50,   avgCost: 950,  packName: 'Cây 50 ly', packFactor: 50 },
+          { id: 'CUP-700ML',   name: 'Ly nhựa 700ml (Size L)', type: 'PACKAGING',     abc: 'A', unit: 'pcs', tareG: 0,   minStock: 50,   avgCost: 1200, packName: 'Cây 50 ly', packFactor: 50 }
+        ],
+        batches: [
+          { id: 'MILK-EXPIRED-00', itemId: 'MILK-FRESH',  initQty: 500,  remQty: 500,  cost: 30,   expiresAt: now - 2 * D, label: 'Quá hạn 2 ngày' },
+          { id: 'MILK-FEFO-01',    itemId: 'MILK-FRESH',  initQty: 150,  remQty: 150,  cost: 30,   expiresAt: now + 1 * D, label: 'Còn 1 ngày' },
+          { id: 'MILK-FEFO-02',    itemId: 'MILK-FRESH',  initQty: 1000, remQty: 1000, cost: 35,   expiresAt: now + 5 * D, label: 'Còn 5 ngày' },
+          { id: 'TEA-MORNING-01',  itemId: 'PREP-TEA',    initQty: 200,  remQty: 200,  cost: 8,    expiresAt: now + 2 * H, label: 'Còn 2 giờ' },
+          { id: 'TEA-NOON-02',     itemId: 'PREP-TEA',    initQty: 3000, remQty: 3000, cost: 9,    expiresAt: now + 6 * H, label: 'Còn 6 giờ' },
+          { id: 'PEARL-NOON-01',   itemId: 'PREP-PEARL',  initQty: 1000, remQty: 1000, cost: 45,   expiresAt: now + 4 * H, label: 'Còn 4 giờ' },
+          { id: 'SUGAR-LOT-01',    itemId: 'SUGAR-SYRUP', initQty: 2000, remQty: 2000, cost: 25,   expiresAt: now + 180 * D, label: 'Còn 6 tháng' },
+          { id: 'CUP500-LOT-01',   itemId: 'CUP-500ML',   initQty: 200,  remQty: 200,  cost: 950,  expiresAt: now + 365 * D, label: 'Còn 1 năm' },
+          { id: 'CUP700-LOT-01',   itemId: 'CUP-700ML',   initQty: 200,  remQty: 200,  cost: 1200, expiresAt: now + 365 * D, label: 'Còn 1 năm' }
+        ],
+        menuItems: [
+          {
+            id: 'MT-CLASSIC', name: 'Trà Sữa Truyền Thống', category: 'Trà Sữa', basePrice: 35000, available: true, version: 1,
+            sop: ['1. Đong 150ml cốt hồng trà vào bình lắc (jigger chuẩn)', '2. Thêm 100ml sữa tươi thanh trùng & siro đường theo mức chọn', '3. Thêm đá bi, lắc mạnh 10 giây, rót ra ly và thêm topping'],
+            lines: [
+              { itemId: 'PREP-TEA',    qty: 150, role: 'BASE_TEA' },
+              { itemId: 'MILK-FRESH',  qty: 100, role: 'MILK' },
+              { itemId: 'SUGAR-SYRUP', qty: 30,  role: 'SUGAR' },
+              { itemId: 'CUP-500ML',   qty: 1,   role: 'CUP' }
+            ]
+          },
+          {
+            id: 'TEA-BLACK', name: 'Hồng Trà Đường Đen', category: 'Trà Trái Cây', basePrice: 28000, available: true, version: 1,
+            sop: ['1. Đong 200ml cốt hồng trà ủ lạnh', '2. Thêm 35ml siro đường khuấy tan đều', '3. Thêm đá đầy ly, dập nắp màng hoặc nắp cầu'],
+            lines: [
+              { itemId: 'PREP-TEA',    qty: 200, role: 'BASE_TEA' },
+              { itemId: 'SUGAR-SYRUP', qty: 35,  role: 'SUGAR' },
+              { itemId: 'CUP-500ML',   qty: 1,   role: 'CUP' }
+            ]
+          },
+          {
+            id: 'MILK-PEARL', name: 'Sữa Tươi Trân Châu Đen', category: 'Sữa Tươi', basePrice: 40000, available: true, version: 1,
+            sop: ['1. Múc 60g trân châu đen nóng tráng thành ly', '2. Thêm đá viên 2/3 ly, rót chậm 180ml sữa tươi thanh trùng', '3. Không khuấy để giữ vân đẹp mắt'],
+            lines: [
+              { itemId: 'MILK-FRESH',  qty: 180, role: 'MILK' },
+              { itemId: 'PREP-PEARL',  qty: 60,  role: 'TOPPING' },
+              { itemId: 'SUGAR-SYRUP', qty: 20,  role: 'SUGAR' },
+              { itemId: 'CUP-500ML',   qty: 1,   role: 'CUP' }
+            ]
+          }
+        ],
+        modifiers: [
+          {
+            id: 'SIZE-L', group: 'SIZE', name: 'Size L (700ml)', priceDelta: 7000,
+            rules: [
+              { action: 'REPLACE',  targetRole: 'CUP',      replaceWith: 'CUP-700ML' },
+              { action: 'MULTIPLY', targetRole: 'BASE_TEA', value: 1.3 },
+              { action: 'MULTIPLY', targetRole: 'MILK',     value: 1.3 },
+              { action: 'MULTIPLY', targetRole: 'SUGAR',    value: 1.3 }
+            ]
+          },
+          {
+            id: 'SUGAR-50', group: 'SUGAR', name: '50% Đường', priceDelta: 0,
+            rules: [{ action: 'MULTIPLY', targetRole: 'SUGAR', value: 0.5 }]
+          },
+          {
+            id: 'SUGAR-0', group: 'SUGAR', name: '0% Đường', priceDelta: 0,
+            rules: [{ action: 'MULTIPLY', targetRole: 'SUGAR', value: 0 }]
+          },
+          {
+            id: 'TOP-PEARL', group: 'TOPPING', name: 'Thêm Trân châu đen (+50g)', priceDelta: 8000,
+            rules: [{ action: 'ADD', targetItemId: 'PREP-PEARL', value: 50 }]
+          }
+        ],
+        cart: [],
+        orders: [],
+        stockLedger: [],
+        wasteRecords: [],
+        eodDraft: {
+          submitted: false,
+          submittedBy: null,
+          submittedAt: null,
+          inputs: {
+            'MILK-FRESH': { sealed: 0, grossG: 860 }, // Cố ý giả lập hơi thiếu nhẹ sau khi bán
+            'PREP-TEA':   { sealed: 2, grossG: 990 },
+            'PREP-PEARL': { sealed: 0, grossG: 1120 },
+            'CUP-500ML':  { sealed: 4, grossG: 0 },
+            'CUP-700ML':  { sealed: 3, grossG: 45 }   // Với pcs dùng trường lẻ
+          }
+        },
+        shiftCash: { openingCash: 2000000, blindCounted: null, closed: false },
+        attendance: [
+          { name: 'Trần Lan Quản Lý', role: 'MANAGER', timeIn: '13:55', wifi: 'BSSID 8C:3B:AD:12:9F', gps: '10.9032, 106.7681', status: 'Hợp lệ' },
+          { name: 'Lê Huy Thu Ngân',  role: 'CASHIER', timeIn: '13:58', wifi: 'BSSID 8C:3B:AD:12:9F', gps: '10.9031, 106.7680', status: 'Hợp lệ' },
+          { name: 'Phạm An Barista',  role: 'BARISTA', timeIn: '14:00', wifi: 'BSSID 8C:3B:AD:12:9F', gps: '10.9032, 106.7682', status: 'Hợp lệ' }
+        ],
+        auditLogs: [
+          { time: fmtTime(now - 30 * 60000), actor: 'Trần Lan Quản Lý', approver: '—', action: 'SHIFT_OPEN', detail: 'Mở Ca Chiều, quỹ đầu ca 2.000.000đ' }
+        ]
+      };
+    }
+
+    function initLedgerFromBatches() {
+      state.stockLedger = state.batches.map(b => {
+        const item = getItem(b.itemId);
+        return {
+          time: 'Đầu ca',
+          itemId: b.itemId,
+          batchId: b.id,
+          txnType: item.type === 'SEMI_FINISHED' ? 'PREP_IN' : 'PURCHASE',
+          qtyChange: b.initQty,
+          unitCost: b.cost,
+          ref: 'Tồn đầu kỳ',
+          actor: 'Nguyễn Minh Chủ'
+        };
+      });
+    }
+
+    // =========================================================================
+    // 2. HÀM TIỆN ÍCH & ĐỘNG CƠ BOM + FEFO (MÔ PHỎNG CHÍNH XÁC PL/pgSQL)
+    // =========================================================================
+    const vnd = n => new Intl.NumberFormat('vi-VN').format(Math.round(n || 0)) + 'đ';
+    const num = n => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(n || 0);
+    function fmtTime(ts = Date.now()) {
+      const d = new Date(ts);
+      return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+    const getItem = id => state.inventoryItems.find(i => i.id === id);
+    const canSeeCost = () => state.currentRole === 'OWNER';
+
+    function getValidStock(itemId) {
+      const now = Date.now();
+      return state.batches
+        .filter(b => b.itemId === itemId && b.remQty > 0 && b.expiresAt > now)
+        .reduce((s, b) => s + b.remQty, 0);
+    }
+
+    function getExpiredStock(itemId) {
+      const now = Date.now();
+      return state.batches
+        .filter(b => b.itemId === itemId && b.remQty > 0 && b.expiresAt <= now)
+        .reduce((s, b) => s + b.remQty, 0);
+    }
+
+    // Đúng thứ tự PL/pgSQL: REPLACE -> MULTIPLY -> ADD
+    function calculateDynamicBOM(menuItem, modifierIds, qty) {
+      const rules = modifierIds.flatMap(mid => (state.modifiers.find(m => m.id === mid)?.rules || []));
+      const totals = {};
+
+      // Bước 1 & 2: REPLACE -> MULTIPLY trên từng recipe_line
+      menuItem.lines.forEach(line => {
+        let effectiveItemId = line.itemId;
+        const repRule = rules.find(r => r.action === 'REPLACE' && (r.targetItemId === line.itemId || r.targetRole === line.role));
+        if (repRule) effectiveItemId = repRule.replaceWith;
+
+        const mulRules = rules.filter(r => r.action === 'MULTIPLY' && (r.targetItemId === line.itemId || r.targetRole === line.role));
+        let factor = 1;
+        mulRules.forEach(r => { factor *= r.value; });
+
+        const finalQty = Math.round(line.qty * factor * qty * 1000) / 1000;
+        if (finalQty > 0) totals[effectiveItemId] = (totals[effectiveItemId] || 0) + finalQty;
+      });
+
+      // Bước 3: ADD
+      rules.filter(r => r.action === 'ADD').forEach(r => {
+        const addQty = Math.round(r.value * qty * 1000) / 1000;
+        if (addQty > 0) totals[r.targetItemId] = (totals[r.targetItemId] || 0) + addQty;
+      });
+
+      return Object.entries(totals).map(([itemId, totalQty]) => ({ itemId, totalQty }));
+    }
+
+    // Trừ kho FEFO theo từng lô còn hạn sử dụng
+    function deductStockFEFO(itemId, qtyNeeded, txnType, refLabel, actorName) {
+      const now = Date.now();
+      let remaining = qtyNeeded;
+      let cogs = 0;
+      const item = getItem(itemId);
+
+      const validBatches = state.batches
+        .filter(b => b.itemId === itemId && b.remQty > 0 && b.expiresAt > now)
+        .sort((a, b) => a.expiresAt - b.expiresAt);
+
+      for (const batch of validBatches) {
+        const deduct = Math.min(remaining, batch.remQty);
+        batch.remQty = Math.round((batch.remQty - deduct) * 1000) / 1000;
+        state.stockLedger.unshift({
+          time: fmtTime(),
+          itemId,
+          batchId: batch.id,
+          txnType,
+          qtyChange: -deduct,
+          unitCost: batch.cost,
+          ref: refLabel,
+          actor: actorName
+        });
+        cogs += deduct * batch.cost;
+        remaining = Math.round((remaining - deduct) * 1000) / 1000;
+        if (remaining <= 0) break;
+      }
+
+      let shortfall = 0;
+      if (remaining > 0) {
+        shortfall = remaining;
+        state.stockLedger.unshift({
+          time: fmtTime(),
+          itemId,
+          batchId: 'ÂM KHO (NULL)',
+          txnType,
+          qtyChange: -remaining,
+          unitCost: item.avgCost,
+          ref: refLabel,
+          actor: actorName
+        });
+        cogs += remaining * item.avgCost;
+      }
+
+      return { cogs: Math.round(cogs * 100) / 100, shortfall };
+    }
+
+    function showToast(title, desc, type = 'info') {
+      const colors = {
+        success: 'bg-emerald-600 text-white',
+        warn:    'bg-amber-500 text-slate-950',
+        danger:  'bg-rose-600 text-white',
+        info:    'bg-slate-800 text-white'
+      };
+      const el = document.createElement('div');
+      el.className = `toast-enter rounded-xl shadow-lg px-4 py-3 ${colors[type] || colors.info}`;
+      el.innerHTML = `<div class="font-bold text-sm">${title}</div><div class="text-xs opacity-90 mt-0.5">${desc}</div>`;
+      const container = document.getElementById('toast-container');
+      container.appendChild(el);
+      setTimeout(() => el.remove(), 4800);
+    }
+
+    function openModal(html) {
+      const bd = document.getElementById('modal-backdrop');
+      document.getElementById('modal-box').innerHTML = html;
+      bd.classList.remove('hidden');
+      bd.classList.add('flex');
+      lucide.createIcons();
+    }
+    function closeModal() {
+      const bd = document.getElementById('modal-backdrop');
+      bd.classList.add('hidden');
+      bd.classList.remove('flex');
+    }
+
+    function logAudit(action, detail, approver = '—') {
+      state.auditLogs.unshift({
+        time: fmtTime(),
+        actor: ROLES[state.currentRole].name,
+        approver,
+        action,
+        detail
+      });
+    }
+
+    // =========================================================================
+    // 3. ĐIỀU HƯỚNG & PHÂN QUYỀN GIAO DIỆN
+    // =========================================================================
+    function renderSidebar() {
+      const nav = document.getElementById('sidebar-nav');
+      const role = state.currentRole;
+      const allowedTabs = NAV_ITEMS.filter(t => t.roles.includes(role));
+      if (!allowedTabs.some(t => t.id === state.currentTab)) {
+        state.currentTab = allowedTabs[0].id;
+      }
+
+      nav.innerHTML = NAV_ITEMS.map(item => {
+        const allowed = item.roles.includes(role);
+        const active = state.currentTab === item.id;
+        if (!allowed) {
+          return `<div class="px-5 py-2.5 flex items-center justify-between text-slate-600 cursor-not-allowed text-sm" title="Vai trò hiện tại không có quyền truy cập">
+            <span class="flex items-center gap-3"><i data-lucide="${item.icon}" class="w-4 h-4"></i>${item.label}</span>
+            <i data-lucide="lock" class="w-3.5 h-3.5"></i>
+          </div>`;
+        }
+        return `<button onclick="switchTab('${item.id}')" class="w-full px-5 py-2.5 flex items-center gap-3 text-sm font-medium transition ${active ? 'tab-active' : 'hover:bg-slate-800 hover:text-white'}">
+          <i data-lucide="${item.icon}" class="w-4 h-4"></i>
+          <span>${item.label}</span>
+        </button>`;
+      }).join('');
+
+      const r = ROLES[role];
+      document.getElementById('role-badge').className = `text-xs font-semibold px-2.5 py-1 rounded-full ${r.badge}`;
+      document.getElementById('role-badge').textContent = `${r.label} • ${r.name}`;
+      document.getElementById('role-hint').textContent = r.hint;
+      document.getElementById('page-title').textContent = NAV_ITEMS.find(t => t.id === state.currentTab)?.label || '';
+    }
+
+    function switchTab(id) {
+      state.currentTab = id;
+      renderAll();
+    }
+
+    // =========================================================================
+    // 4. VIEW 1: TỔNG QUAN CHỦ QUÁN (DASHBOARD)
+    // =========================================================================
+    function renderDashboard() {
+      const paidOrders = state.orders.filter(o => o.status === 'PAID');
+      const revenue = paidOrders.reduce((s, o) => s + o.total, 0);
+      const totalCogs = paidOrders.reduce((s, o) => s + o.cogs, 0);
+      const foodCostPct = revenue > 0 ? (totalCogs / revenue * 100) : 0;
+      const lowStocks = state.inventoryItems.filter(i => getValidStock(i.id) <= i.minStock);
+      const expiredBatches = state.batches.filter(b => b.remQty > 0 && b.expiresAt <= Date.now());
+      const eodResults = computeEODVariance();
+      const redAlerts = state.eodDraft.submitted ? eodResults.filter(r => r.alert === 'RED').length : 0;
+
+      return `
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-xs">
+            <div class="text-xs font-semibold text-slate-500 uppercase">Doanh thu ca hiện tại</div>
+            <div class="text-2xl font-bold text-slate-900 mt-1">${vnd(revenue)}</div>
+            <div class="text-xs text-emerald-600 mt-1">${paidOrders.length} đơn đã thanh toán</div>
+          </div>
+          <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-xs">
+            <div class="text-xs font-semibold text-slate-500 uppercase">Giá vốn thực xuất (COGS)</div>
+            <div class="text-2xl font-bold text-slate-900 mt-1">${vnd(totalCogs)}</div>
+            <div class="text-xs ${foodCostPct > 35 ? 'text-rose-600 font-bold' : 'text-slate-500'} mt-1">Food Cost: ${foodCostPct.toFixed(2)}% (Ngưỡng an toàn &le; 35%)</div>
+          </div>
+          <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-xs">
+            <div class="text-xs font-semibold text-slate-500 uppercase">Cảnh báo Kho & Date</div>
+            <div class="text-2xl font-bold ${lowStocks.length + expiredBatches.length > 0 ? 'text-amber-600' : 'text-emerald-600'} mt-1">${lowStocks.length} chạm đáy • ${expiredBatches.length} quá hạn</div>
+            <div class="text-xs text-slate-500 mt-1">Tự động quét theo FEFO</div>
+          </div>
+          <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-xs">
+            <div class="text-xs font-semibold text-slate-500 uppercase">Cờ Đỏ Đối soát EOD</div>
+            <div class="text-2xl font-bold ${redAlerts > 0 ? 'text-rose-600' : 'text-slate-800'} mt-1">${state.eodDraft.submitted ? redAlerts + ' cảnh báo đỏ' : 'Chưa nộp kiểm mù'}</div>
+            <div class="text-xs text-slate-500 mt-1">${state.eodDraft.submitted ? 'Đã đối chiếu sổ cái' : 'Đang chờ ca tối kiểm đếm'}</div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div class="bg-white rounded-xl border border-slate-200 p-5">
+            <h2 class="font-bold text-slate-900 mb-3 flex items-center gap-2">
+              <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-500"></i> Cảnh báo vận hành cần xử lý ngay
+            </h2>
+            <div class="space-y-2.5 text-sm">
+              ${expiredBatches.map(b => `
+                <div class="p-3 rounded-lg bg-rose-50 border border-rose-200 flex items-center justify-between">
+                  <div>
+                    <div class="font-semibold text-rose-800">Lô QUÁ HẠN: ${b.id} (${getItem(b.itemId).name})</div>
+                    <div class="text-xs text-rose-600">Còn ${num(b.remQty)} ${getItem(b.itemId).unit} — Hệ thống FEFO đã khóa tự xuất bán, cần lập phiếu Báo hủy.</div>
+                  </div>
+                  <button onclick="switchTab('inventory')" class="text-xs font-semibold px-2.5 py-1 bg-rose-600 text-white rounded-lg shrink-0">Xử lý</button>
+                </div>
+              `).join('')}
+              ${lowStocks.map(i => `
+                <div class="p-3 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-between">
+                  <div>
+                    <div class="font-semibold text-amber-900">Chạm Min-Stock: ${i.name}</div>
+                    <div class="text-xs text-amber-700">Tồn khả dụng: ${num(getValidStock(i.id))} / ngưỡng tối thiểu ${num(i.minStock)} ${i.unit}. Cần lên đơn PO.</div>
+                  </div>
+                  <span class="text-xs font-bold text-amber-800 bg-amber-200/70 px-2 py-1 rounded">Đặt hàng</span>
+                </div>
+              `).join('')}
+              ${expiredBatches.length === 0 && lowStocks.length === 0 ? `<div class="text-slate-500 text-sm">Không có cảnh báo kho bất thường.</div>` : ''}
+            </div>
+          </div>
+
+          <div class="bg-white rounded-xl border border-slate-200 p-5">
+            <h2 class="font-bold text-slate-900 mb-3 flex items-center gap-2">
+              <i data-lucide="activity" class="w-4 h-4 text-indigo-500"></i> Nhật ký bảo mật mới nhất (Audit Log)
+            </h2>
+            <div class="space-y-2 text-xs">
+              ${state.auditLogs.slice(0, 6).map(l => `
+                <div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 flex justify-between gap-2">
+                  <div>
+                    <span class="font-bold text-slate-800">[${l.action}]</span> ${l.detail}
+                    <div class="text-slate-500 mt-0.5">Thực hiện: ${l.actor} ${l.approver !== '—' ? '• Duyệt PIN: ' + l.approver : ''}</div>
+                  </div>
+                  <span class="text-slate-400 shrink-0">${l.time}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // =========================================================================
+    // 5. VIEW 2: BÁN HÀNG POS & BOM ĐỘNG
+    // =========================================================================
+    function renderPOS() {
+      const cartTotal = state.cart.reduce((s, c) => s + c.unitPrice * c.qty, 0);
+      return `
+        <div class="mb-4 p-3.5 rounded-xl bg-amber-50 border border-amber-200 flex flex-wrap items-center justify-between gap-3">
+          <div class="text-sm text-amber-900">
+            <span class="font-bold">⚡ Kịch bản kiểm thử nhanh (Khớp Seed Data SQL):</span>
+            Bấm nút bên phải để bán ngay <b>2 ly Trà Sữa Truyền Thống — Size L + 0% Đường + Thêm Trân châu</b> và xem FEFO trừ 2 lô Sữa + 2 mẻ Trà, tính đúng COGS <b>18.560đ</b>.
+          </div>
+          <button onclick="runSeedOrderPreset()" class="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-lg shadow-xs shrink-0">
+            Chạy thử đơn ORD-TEST-001
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <!-- Menu -->
+          <div class="lg:col-span-2 space-y-4">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              ${state.menuItems.map(m => `
+                <div class="bg-white rounded-xl border border-slate-200 p-4 flex flex-col justify-between hover:border-amber-400 transition shadow-xs">
+                  <div>
+                    <div class="flex items-center justify-between">
+                      <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">${m.category}</span>
+                      <span class="text-[11px] px-2 py-0.5 rounded-full ${m.available ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}">${m.available ? 'Đang bán' : 'Hết món'}</span>
+                    </div>
+                    <h3 class="font-bold text-slate-900 mt-1.5">${m.name}</h3>
+                    <div class="text-amber-600 font-bold mt-1">${vnd(m.basePrice)}</div>
+                  </div>
+                  <button ${!m.available ? 'disabled' : ''} onclick="openModifierModal('${m.id}')" class="mt-4 w-full py-2 rounded-lg text-xs font-bold ${m.available ? 'bg-slate-900 hover:bg-slate-800 text-white' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}">
+                    + Chọn biến thể & Thêm
+                  </button>
+                </div>
+              `).join('')}
+            </div>
+
+            <!-- Danh sách hóa đơn đã bán trong ca -->
+            <div class="bg-white rounded-xl border border-slate-200 p-5">
+              <div class="flex items-center justify-between mb-3">
+                <h2 class="font-bold text-slate-900">Hóa đơn trong ca (${state.orders.length})</h2>
+                <span class="text-xs text-slate-500">Hủy hóa đơn đã in tem yêu cầu <b>PIN Quản lý (2468)</b></span>
+              </div>
+              ${state.orders.length === 0 ? `<div class="text-sm text-slate-400 py-6 text-center">Chưa có hóa đơn nào. Hãy chọn món hoặc bấm "Chạy thử đơn ORD-TEST-001".</div>` : `
+                <div class="overflow-x-auto">
+                  <table class="w-full text-sm text-left">
+                    <thead class="text-xs uppercase bg-slate-50 text-slate-500">
+                      <tr>
+                        <th class="px-3 py-2">Mã đơn</th>
+                        <th class="px-3 py-2">Chi tiết món</th>
+                        <th class="px-3 py-2 text-right">Thanh toán</th>
+                        ${canSeeCost() ? '<th class="px-3 py-2 text-right">COGS thực xuất</th>' : ''}
+                        <th class="px-3 py-2 text-center">Trạng thái</th>
+                        <th class="px-3 py-2 text-right">Thao tác</th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                      ${state.orders.map(o => `
+                        <tr>
+                          <td class="px-3 py-2.5 font-mono text-xs font-bold">${o.code}<div class="text-[11px] font-sans font-normal text-slate-400">${o.time}</div></td>
+                          <td class="px-3 py-2.5 text-xs">${o.summary}</td>
+                          <td class="px-3 py-2.5 text-right font-semibold">${vnd(o.total)}</td>
+                          ${canSeeCost() ? `<td class="px-3 py-2.5 text-right text-xs font-semibold text-indigo-700">${vnd(o.cogs)}<div class="text-[11px] text-slate-400">${(o.cogs / o.total * 100).toFixed(2)}%</div></td>` : ''}
+                          <td class="px-3 py-2.5 text-center">
+                            <span class="text-[11px] font-bold px-2 py-0.5 rounded-full ${o.status === 'PAID' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}">${o.status}</span>
+                          </td>
+                          <td class="px-3 py-2.5 text-right">
+                            ${o.status === 'PAID' ? `<button onclick="requestVoidOrder('${o.code}')" class="text-xs font-semibold text-rose-600 hover:underline">Hủy bill</button>` : `<span class="text-[11px] text-slate-400">${o.voidReason || ''}</span>`}
+                          </td>
+                        </tr>
+                      `).join('')}
+                    </tbody>
+                  </table>
+                </div>
+              `}
+            </div>
+          </div>
+
+          <!-- Giỏ hàng -->
+          <div class="bg-white rounded-xl border border-slate-200 p-5 flex flex-col justify-between h-fit">
+            <div>
+              <h2 class="font-bold text-slate-900 pb-3 border-b border-slate-100 flex items-center justify-between">
+                <span>Đơn đang gọi</span>
+                <span class="text-xs font-normal text-slate-500">${state.cart.length} dòng</span>
+              </h2>
+              <div class="py-3 space-y-3 min-h-[140px]">
+                ${state.cart.length === 0 ? `<div class="text-sm text-slate-400 text-center py-8">Giỏ hàng trống</div>` : state.cart.map((c, idx) => `
+                  <div class="flex justify-between gap-2 text-sm border-b border-slate-100 pb-2.5">
+                    <div>
+                      <div class="font-semibold text-slate-800">${c.qty}x ${c.menuName}</div>
+                      <div class="text-xs text-slate-500">${c.modNames.length ? c.modNames.join(', ') : 'Tiêu chuẩn Size M'}</div>
+                    </div>
+                    <div class="text-right shrink-0">
+                      <div class="font-bold">${vnd(c.unitPrice * c.qty)}</div>
+                      <button onclick="removeCartItem(${idx})" class="text-[11px] text-rose-500 hover:underline">Xóa</button>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+            <div class="pt-3 border-t border-slate-200 space-y-3">
+              <div class="flex justify-between text-base font-bold">
+                <span>Tổng cộng</span>
+                <span class="text-amber-600">${vnd(cartTotal)}</span>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <button ${state.cart.length === 0 ? 'disabled' : ''} onclick="checkoutCart('CASH')" class="py-2.5 rounded-lg text-xs font-bold ${state.cart.length ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-slate-200 text-slate-400'}">Thu Tiền Mặt</button>
+                <button ${state.cart.length === 0 ? 'disabled' : ''} onclick="checkoutCart('QR_TRANSFER')" class="py-2.5 rounded-lg text-xs font-bold ${state.cart.length ? 'bg-slate-900 hover:bg-slate-800 text-white' : 'bg-slate-200 text-slate-400'}">Chuyển Khoản QR</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function openModifierModal(menuId) {
+      const m = state.menuItems.find(x => x.id === menuId);
+      openModal(`
+        <div class="p-5 border-b border-slate-200 flex items-center justify-between">
+          <div>
+            <h3 class="font-bold text-slate-900">${m.name}</h3>
+            <div class="text-xs text-slate-500">Giá gốc Size M: ${vnd(m.basePrice)}</div>
+          </div>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-slate-700"><i data-lucide="x" class="w-5 h-5"></i></button>
+        </div>
+        <div class="p-5 space-y-4 text-sm">
+          <div>
+            <label class="font-semibold text-xs uppercase text-slate-500">Số lượng ly</label>
+            <input id="mod-qty" type="number" min="1" value="1" class="mt-1 w-24 border border-slate-300 rounded-lg px-3 py-1.5 font-bold" />
+          </div>
+          <div>
+            <label class="font-semibold text-xs uppercase text-slate-500 block mb-2">Tùy chọn biến thể (Tự động đổi định lượng BOM)</label>
+            <div class="space-y-2">
+              ${state.modifiers.map(mod => `
+                <label class="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer">
+                  <span class="flex items-center gap-2">
+                    <input type="checkbox" value="${mod.id}" class="mod-chk rounded text-amber-600" />
+                    <span class="font-medium">${mod.name}</span>
+                  </span>
+                  <span class="text-xs font-semibold text-slate-600">${mod.priceDelta > 0 ? '+' + vnd(mod.priceDelta) : '0đ'}</span>
+                </label>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+        <div class="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+          <button onclick="closeModal()" class="px-4 py-2 text-xs font-semibold text-slate-600">Hủy</button>
+          <button onclick="confirmAddToCart('${m.id}')" class="px-4 py-2 bg-slate-900 text-white text-xs font-bold rounded-lg">Thêm vào đơn</button>
+        </div>
+      `);
+    }
+
+    function confirmAddToCart(menuId) {
+      const m = state.menuItems.find(x => x.id === menuId);
+      const qty = Math.max(1, parseInt(document.getElementById('mod-qty').value) || 1);
+      const modIds = [...document.querySelectorAll('.mod-chk:checked')].map(el => el.value);
+      const mods = modIds.map(id => state.modifiers.find(x => x.id === id));
+      const unitPrice = m.basePrice + mods.reduce((s, x) => s + x.priceDelta, 0);
+      state.cart.push({ menuId, menuName: m.name, qty, modIds, modNames: mods.map(x => x.name), unitPrice });
+      closeModal();
+      renderAll();
+    }
+
+    function removeCartItem(idx) {
+      state.cart.splice(idx, 1);
+      renderAll();
+    }
+
+    function runSeedOrderPreset() {
+      state.cart = [{
+        menuId: 'MT-CLASSIC',
+        menuName: 'Trà Sữa Truyền Thống',
+        qty: 2,
+        modIds: ['SIZE-L', 'SUGAR-0', 'TOP-PEARL'],
+        modNames: ['Size L (700ml)', '0% Đường', 'Thêm Trân châu đen (+50g)'],
+        unitPrice: 50000
+      }];
+      checkoutCart('QR_TRANSFER', 'ORD-TEST-001');
+    }
+
+    function checkoutCart(method, customCode = null) {
+      if (state.cart.length === 0) return;
+      const orderCode = customCode || ('ORD-' + String(state.orders.length + 1).padStart(3, '0'));
+      const actor = ROLES[state.currentRole].name;
+      let orderTotal = 0;
+      let orderCogs = 0;
+      const summaryParts = [];
+      const touchedItems = new Set();
+
+      state.cart.forEach(line => {
+        const menu = state.menuItems.find(m => m.id === line.menuId);
+        orderTotal += line.unitPrice * line.qty;
+        summaryParts.push(`${line.qty}x ${line.menuName}${line.modNames.length ? ' (' + line.modNames.join(', ') + ')' : ''}`);
+
+        const bomLines = calculateDynamicBOM(menu, line.modIds, line.qty);
+        bomLines.forEach(bl => {
+          touchedItems.add(bl.itemId);
+          const res = deductStockFEFO(bl.itemId, bl.totalQty, 'POS_SALE', orderCode, actor);
+          orderCogs += res.cogs;
+        });
+      });
+
+      state.orders.unshift({
+        code: orderCode,
+        time: fmtTime(),
+        summary: summaryParts.join('; '),
+        total: orderTotal,
+        cogs: Math.round(orderCogs * 100) / 100,
+        method,
+        status: 'PAID',
+        ticketPrinted: true
+      });
+      state.cart = [];
+
+      // Cảnh báo chạm ngưỡng Min-stock
+      touchedItems.forEach(itemId => {
+        const item = getItem(itemId);
+        const rem = getValidStock(itemId);
+        if (rem <= item.minStock) {
+          showToast(`⚠️ Cảnh báo Min-Stock: ${item.name}`, `Tồn còn hạn chỉ còn ${num(rem)} ${item.unit} (ngưỡng tối thiểu ${num(item.minStock)} ${item.unit}).`, 'warn');
+        }
+      });
+
+      showToast(
+        `✅ Đã chốt đơn ${orderCode} (${vnd(orderTotal)})`,
+        canSeeCost() ? `Đã trừ kho FEFO tự động. Giá vốn thực xuất: ${vnd(orderCogs)} (${(orderCogs / orderTotal * 100).toFixed(2)}%).` : 'Đã in tem pha chế và trừ kho FEFO tự động.',
+        'success'
+      );
+      renderAll();
+    }
+
+    function requestVoidOrder(code) {
+      const needPin = state.currentRole === 'CASHIER';
+      openModal(`
+        <div class="p-5 border-b border-slate-200">
+          <h3 class="font-bold text-rose-700 flex items-center gap-2"><i data-lucide="shield-alert" class="w-5 h-5"></i> Hủy hóa đơn đã in tem: ${code}</h3>
+          <p class="text-xs text-slate-500 mt-1">${needPin ? 'Thu ngân bị khóa quyền tự hủy. Cần Quản lý nhập mã PIN phê duyệt tại quầy (PIN mẫu: 2468).' : 'Thao tác này sẽ ghi cứng vào Audit Log và gửi cảnh báo về Chủ quán.'}</p>
+        </div>
+        <div class="p-5 space-y-3 text-sm">
+          <div>
+            <label class="text-xs font-semibold text-slate-600">Lý do hủy bắt buộc *</label>
+            <input id="void-reason" type="text" placeholder="VD: Khách đổi ý chọn món khác" class="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2" />
+          </div>
+          ${needPin ? `
+            <div>
+              <label class="text-xs font-semibold text-rose-700">Mã PIN Quản lý ca (Manager Override) *</label>
+              <input id="void-pin" type="password" placeholder="Nhập 2468 hoặc 9999" class="mt-1 w-full border border-rose-300 rounded-lg px-3 py-2 font-mono tracking-widest" />
+            </div>
+          ` : ''}
+        </div>
+        <div class="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+          <button onclick="closeModal()" class="px-4 py-2 text-xs font-semibold text-slate-600">Đóng</button>
+          <button onclick="confirmVoidOrder('${code}', ${needPin})" class="px-4 py-2 bg-rose-600 text-white text-xs font-bold rounded-lg">Xác nhận Hủy & Ghi Audit Log</button>
+        </div>
+      `);
+    }
+
+    function confirmVoidOrder(code, needPin) {
+      const reason = document.getElementById('void-reason').value.trim();
+      if (!reason) return showToast('Thiếu lý do', 'Bắt buộc nhập lý do hủy hóa đơn.', 'danger');
+      let approver = '—';
+      if (needPin) {
+        const pin = document.getElementById('void-pin').value.trim();
+        if (pin === '2468') approver = ROLES.MANAGER.name;
+        else if (pin === '9999') approver = ROLES.OWNER.name;
+        else return showToast('Sai mã PIN phê duyệt', 'Mã PIN Quản lý không hợp lệ (thử 2468).', 'danger');
+      }
+      const o = state.orders.find(x => x.code === code);
+      if (o) {
+        o.status = 'VOIDED';
+        o.voidReason = reason;
+        logAudit('POS_VOID_PAID', `Hủy hóa đơn ${code} (${vnd(o.total)}) — Lý do: ${reason}`, approver);
+        showToast('🚨 Đã hủy hóa đơn & Bắn cảnh báo Chủ quán', `Bản ghi bất biến đã được lưu vào Audit Log.`, 'warn');
+      }
+      closeModal();
+      renderAll();
+    }
+
+    // =========================================================================
+    // 6. VIEW 3: KHO ĐA ĐƠN VỊ, LÔ FEFO, BÁN THÀNH PHẨM & SỔ CÁI
+    // =========================================================================
+    function renderInventory() {
+      const now = Date.now();
+      return `
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
+          <div class="text-sm text-slate-600">Toàn bộ biến động quy về <b>đơn vị gốc (ml, g, pcs)</b>. ${canSeeCost() ? '' : '<span class="text-amber-700 font-semibold">(Đang ẩn đơn giá & giá vốn theo phân quyền RBAC)</span>'}</div>
+          <div class="flex gap-2">
+            <button onclick="openPrepModal()" class="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5">
+              <i data-lucide="flame" class="w-3.5 h-3.5"></i> Nấu mẻ Bán thành phẩm (Prep)
+            </button>
+            <button onclick="openWasteModal()" class="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5">
+              <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Báo hủy hàng (Waste)
+            </button>
+          </div>
+        </div>
+
+        <!-- Bảng lô hàng FEFO -->
+        <div class="bg-white rounded-xl border border-slate-200 overflow-hidden mb-6">
+          <div class="px-5 py-3.5 border-b border-slate-200 font-bold text-slate-900">Chi tiết Lô hàng & Hạn sử dụng (FEFO)</div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm text-left">
+              <thead class="text-xs uppercase bg-slate-50 text-slate-500">
+                <tr>
+                  <th class="px-4 py-2.5">Mã lô</th>
+                  <th class="px-4 py-2.5">Nguyên liệu</th>
+                  <th class="px-4 py-2.5">Phân loại</th>
+                  <th class="px-4 py-2.5 text-right">Còn lại / Ban đầu</th>
+                  ${canSeeCost() ? '<th class="px-4 py-2.5 text-right">Đơn giá lô</th>' : ''}
+                  <th class="px-4 py-2.5 text-center">Trạng thái FEFO</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                ${state.batches.map(b => {
+                  const item = getItem(b.itemId);
+                  const expired = b.expiresAt <= now;
+                  const empty = b.remQty <= 0;
+                  return `
+                    <tr class="${expired && !empty ? 'bg-rose-50/70' : empty ? 'opacity-50' : ''}">
+                      <td class="px-4 py-2.5 font-mono text-xs font-bold">${b.id}</td>
+                      <td class="px-4 py-2.5 font-medium">${item.name} <span class="text-xs text-slate-400">(${item.abc})</span></td>
+                      <td class="px-4 py-2.5 text-xs"><span class="px-2 py-0.5 rounded bg-slate-100">${item.type}</span></td>
+                      <td class="px-4 py-2.5 text-right font-semibold">${num(b.remQty)} / ${num(b.initQty)} ${item.unit}</td>
+                      ${canSeeCost() ? `<td class="px-4 py-2.5 text-right text-xs font-mono">${vnd(b.cost)}/${item.unit}</td>` : ''}
+                      <td class="px-4 py-2.5 text-center">
+                        ${empty ? '<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">ĐÃ HẾT LÔ</span>'
+                          : expired ? '<span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-rose-600 text-white">QUÁ HẠN (KHÓA XUẤT)</span>'
+                          : `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">${b.label}</span>`}
+                      </td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Phiếu báo hủy chờ duyệt -->
+        ${state.wasteRecords.length > 0 ? `
+          <div class="bg-white rounded-xl border border-slate-200 p-5 mb-6">
+            <h3 class="font-bold text-slate-900 mb-3">Phiếu Báo hủy hàng (Waste Records)</h3>
+            <div class="space-y-2">
+              ${state.wasteRecords.map((w, idx) => `
+                <div class="p-3 rounded-lg border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-sm">
+                  <div>
+                    <span class="font-bold">${getItem(w.itemId).name}</span> — <b>${num(w.qty)} ${getItem(w.itemId).unit}</b>
+                    <span class="text-xs px-2 py-0.5 rounded bg-slate-100 ml-1">${w.reason}</span>
+                    <div class="text-xs text-slate-500 mt-0.5">Báo bởi: ${w.reportedBy} • Ảnh camera: <span class="text-emerald-600 font-medium">✓ Đã đính kèm (${w.time})</span></div>
+                  </div>
+                  <div>
+                    ${w.status === 'PENDING' ? (
+                      ['OWNER', 'MANAGER'].includes(state.currentRole)
+                        ? `<button onclick="approveWaste(${idx})" class="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg">Duyệt & Trừ kho</button>`
+                        : `<span class="text-xs font-semibold text-amber-600 bg-amber-50 px-2.5 py-1 rounded">Chờ Quản lý duyệt</span>`
+                    ) : `<span class="text-xs font-bold text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded">ĐÃ DUYỆT (${w.approvedBy})</span>`}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- Sổ cái kho bất biến -->
+        <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div class="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between">
+            <span class="font-bold text-slate-900">Sổ cái kho bất biến (stock_ledger — Append-Only)</span>
+            <span class="text-xs text-slate-500">Chỉ INSERT • Cấm sửa/xóa</span>
+          </div>
+          <div class="overflow-x-auto max-h-80 overflow-y-auto custom-scroll">
+            <table class="w-full text-xs text-left">
+              <thead class="uppercase bg-slate-50 text-slate-500 sticky top-0">
+                <tr>
+                  <th class="px-4 py-2">Thời gian</th>
+                  <th class="px-4 py-2">Loại GD</th>
+                  <th class="px-4 py-2">Nguyên liệu</th>
+                  <th class="px-4 py-2">Mã lô</th>
+                  <th class="px-4 py-2 text-right">Biến động</th>
+                  ${canSeeCost() ? '<th class="px-4 py-2 text-right">Giá trị COGS</th>' : ''}
+                  <th class="px-4 py-2">Chứng từ</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                ${state.stockLedger.map(l => `
+                  <tr>
+                    <td class="px-4 py-2 text-slate-500">${l.time}</td>
+                    <td class="px-4 py-2 font-bold">${l.txnType}</td>
+                    <td class="px-4 py-2">${getItem(l.itemId).name}</td>
+                    <td class="px-4 py-2 font-mono">${l.batchId}</td>
+                    <td class="px-4 py-2 text-right font-bold ${l.qtyChange < 0 ? 'text-rose-600' : 'text-emerald-600'}">${l.qtyChange > 0 ? '+' : ''}${num(l.qtyChange)} ${getItem(l.itemId).unit}</td>
+                    ${canSeeCost() ? `<td class="px-4 py-2 text-right">${vnd(Math.abs(l.qtyChange) * l.unitCost)}</td>` : ''}
+                    <td class="px-4 py-2 text-slate-500">${l.ref}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    function openPrepModal() {
+      openModal(`
+        <div class="p-5 border-b border-slate-200"><h3 class="font-bold text-slate-900">Nấu mẻ Bán thành phẩm mới (Prep)</h3></div>
+        <div class="p-5 space-y-3 text-sm">
+          <div>
+            <label class="text-xs font-semibold text-slate-600">Chọn bán thành phẩm</label>
+            <select id="prep-item" class="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2">
+              <option value="PREP-TEA">Cốt hồng trà ủ sẵn (ml) — Hạn dùng 6 giờ</option>
+              <option value="PREP-PEARL">Trân châu đen đã nấu (g) — Hạn dùng 4 giờ</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs font-semibold text-slate-600">Sản lượng thành phẩm thu được (ml / g)</label>
+            <input id="prep-qty" type="number" value="2000" min="100" class="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 font-bold" />
+          </div>
+        </div>
+        <div class="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+          <button onclick="closeModal()" class="px-4 py-2 text-xs font-semibold text-slate-600">Hủy</button>
+          <button onclick="confirmPrep()" class="px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-lg">Nhập lô Bán thành phẩm</button>
+        </div>
+      `);
+    }
+
+    function confirmPrep() {
+      const itemId = document.getElementById('prep-item').value;
+      const qty = Math.max(1, parseFloat(document.getElementById('prep-qty').value) || 0);
+      const item = getItem(itemId);
+      const batchId = `${itemId === 'PREP-TEA' ? 'TEA' : 'PEARL'}-PREP-${String(state.batches.length + 1).padStart(2, '0')}`;
+      const hours = itemId === 'PREP-TEA' ? 6 : 4;
+      state.batches.push({
+        id: batchId, itemId, initQty: qty, remQty: qty, cost: item.avgCost,
+        expiresAt: Date.now() + hours * 3600 * 1000, label: `Mẻ mới (Còn ${hours} giờ)`
+      });
+      state.stockLedger.unshift({
+        time: fmtTime(), itemId, batchId, txnType: 'PREP_IN', qtyChange: qty,
+        unitCost: item.avgCost, ref: 'Lệnh nấu Prep', actor: ROLES[state.currentRole].name
+      });
+      logAudit('PREP_PRODUCTION', `Nấu mới ${num(qty)} ${item.unit} ${item.name} (Lô ${batchId})`);
+      showToast('✅ Đã nhập lô bán thành phẩm', `Tạo lô ${batchId} (+${num(qty)} ${item.unit}), tự động đặt hạn dùng ${hours} giờ.`, 'success');
+      closeModal();
+      renderAll();
+    }
+
+    function openWasteModal() {
+      openModal(`
+        <div class="p-5 border-b border-slate-200"><h3 class="font-bold text-rose-700">Tạo phiếu Báo hủy hàng (Waste)</h3></div>
+        <div class="p-5 space-y-3 text-sm">
+          <div>
+            <label class="text-xs font-semibold text-slate-600">Nguyên liệu bị hủy / đổ vỡ</label>
+            <select id="waste-item" class="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2">
+              ${state.inventoryItems.map(i => `<option value="${i.id}">${i.name} (${i.unit})</option>`).join('')}
+            </select>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Số lượng (${'ml/g/cái'})</label>
+              <input id="waste-qty" type="number" value="500" min="1" class="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 font-bold" />
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Lý do</label>
+              <select id="waste-reason" class="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2">
+                <option value="EXPIRED">Hết hạn sử dụng (EXPIRED)</option>
+                <option value="SPILL">Làm đổ / vỡ (SPILL)</option>
+                <option value="WRONG_DRINK">Pha nhầm món (WRONG_DRINK)</option>
+              </select>
+            </div>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-100 border border-dashed border-slate-300 text-xs text-slate-600 flex items-center gap-2">
+            <i data-lucide="camera" class="w-4 h-4 text-emerald-600"></i>
+            <span>Chụp ảnh trực tiếp từ camera: <b class="text-emerald-700">cam_proof_live.jpg (Đã xác thực thời gian thực)</b></span>
+          </div>
+        </div>
+        <div class="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+          <button onclick="closeModal()" class="px-4 py-2 text-xs font-semibold text-slate-600">Hủy</button>
+          <button onclick="confirmWaste()" class="px-4 py-2 bg-rose-600 text-white text-xs font-bold rounded-lg">${state.currentRole === 'BARISTA' ? 'Gửi chờ Quản lý duyệt' : 'Tạo & Duyệt ngay'}</button>
+        </div>
+      `);
+    }
+
+    function confirmWaste() {
+      const itemId = document.getElementById('waste-item').value;
+      const qty = Math.max(1, parseFloat(document.getElementById('waste-qty').value) || 0);
+      const reason = document.getElementById('waste-reason').value;
+      const rec = {
+        itemId, qty, reason, time: fmtTime(),
+        reportedBy: ROLES[state.currentRole].name,
+        status: 'PENDING', approvedBy: null
+      };
+      state.wasteRecords.unshift(rec);
+      if (state.currentRole !== 'BARISTA') {
+        approveWaste(0);
+      } else {
+        showToast('📩 Đã gửi phiếu báo hủy', 'Barista không có quyền tự duyệt. Hãy đổi sang Quản lý ca để duyệt trừ kho.', 'info');
+      }
+      closeModal();
+      renderAll();
+    }
+
+    function approveWaste(idx) {
+      const w = state.wasteRecords[idx];
+      if (!w || w.status === 'APPROVED') return;
+      w.status = 'APPROVED';
+      w.approvedBy = ROLES[state.currentRole].name;
+
+      // Nếu là lý do EXPIRED và có lô quá hạn, trừ thẳng lô quá hạn trước
+      let rem = w.qty;
+      if (w.reason === 'EXPIRED') {
+        const expBatches = state.batches.filter(b => b.itemId === w.itemId && b.remQty > 0 && b.expiresAt <= Date.now());
+        for (const b of expBatches) {
+          const d = Math.min(rem, b.remQty);
+          b.remQty -= d;
+          state.stockLedger.unshift({
+            time: fmtTime(), itemId: w.itemId, batchId: b.id, txnType: 'WASTE',
+            qtyChange: -d, unitCost: b.cost, ref: `Hủy ${w.reason}`, actor: w.approvedBy
+          });
+          rem -= d;
+          if (rem <= 0) break;
+        }
+      }
+      if (rem > 0) deductStockFEFO(w.itemId, rem, 'WASTE', `Hủy ${w.reason}`, w.approvedBy);
+
+      logAudit('WASTE_APPROVED', `Duyệt hủy ${num(w.qty)} ${getItem(w.itemId).unit} ${getItem(w.itemId).name} (${w.reason})`, w.approvedBy);
+      showToast('✅ Đã duyệt phiếu hủy & Ghi sổ cái', 'Lượng hủy hợp lệ sẽ được trừ khỏi Tồn lý thuyết EOD.', 'success');
+      renderAll();
+    }
+
+    // =========================================================================
+    // 7. VIEW 4: CÔNG THỨC PHA CHẾ (BOM) & SOP
+    // =========================================================================
+    function renderBOM() {
+      return `
+        <div class="space-y-5">
+          ${state.menuItems.map(m => {
+            const estCogs = m.lines.reduce((s, l) => s + l.qty * getItem(l.itemId).avgCost, 0);
+            const fc = (estCogs / m.basePrice * 100);
+            return `
+              <div class="bg-white rounded-xl border border-slate-200 p-5">
+                <div class="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                  <div>
+                    <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-600">v${m.version} • Đang áp dụng</span>
+                    <h3 class="font-bold text-lg text-slate-900 mt-1">${m.name}</h3>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    ${canSeeCost() ? `
+                      <div class="text-right">
+                        <div class="text-xs text-slate-500">Giá vốn ước tính (Size M)</div>
+                        <div class="font-bold text-indigo-700">${vnd(estCogs)} <span class="text-xs ${fc > 35 ? 'text-rose-600' : 'text-emerald-600'}">(${fc.toFixed(1)}% giá bán)</span></div>
+                      </div>
+                      <button onclick="bumpRecipeVersion('${m.id}')" class="px-3 py-1.5 bg-slate-900 text-white text-xs font-bold rounded-lg">Tạo phiên bản mới</button>
+                    ` : `<span class="text-xs font-semibold text-amber-700 bg-amber-50 px-3 py-1.5 rounded-lg">🔒 Ẩn giá vốn & Khóa chỉnh sửa BOM</span>`}
+                  </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 text-sm">
+                  <div>
+                    <div class="text-xs font-bold uppercase text-slate-500 mb-2">Định lượng chuẩn (Base BOM)</div>
+                    <ul class="space-y-1.5">
+                      ${m.lines.map(l => {
+                        const it = getItem(l.itemId);
+                        return `<li class="flex justify-between py-1 border-b border-slate-100">
+                          <span>${it.name} <span class="text-[11px] font-mono text-slate-400">[${l.role}]</span></span>
+                          <span class="font-bold">${num(l.qty)} ${it.unit}</span>
+                        </li>`;
+                      }).join('')}
+                    </ul>
+                  </div>
+                  <div>
+                    <div class="text-xs font-bold uppercase text-slate-500 mb-2">Quy trình thao tác chuẩn (SOP Đào tạo)</div>
+                    <ol class="space-y-1.5 text-slate-700 text-xs leading-relaxed">
+                      ${m.sop.map(step => `<li class="p-2 rounded bg-slate-50 border border-slate-100">${step}</li>`).join('')}
+                    </ol>
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    function bumpRecipeVersion(menuId) {
+      const m = state.menuItems.find(x => x.id === menuId);
+      m.version += 1;
+      logAudit('BOM_VERSION_BUMP', `Chủ quán phát hành phiên bản công thức v${m.version} cho ${m.name}`);
+      showToast(`📌 Đã tạo công thức v${m.version}`, 'Các hóa đơn cũ vẫn giữ nguyên phiên bản và giá vốn đã đóng băng.', 'info');
+      renderAll();
+    }
+
+    // =========================================================================
+    // 8. VIEW 5: ĐỐI SOÁT CUỐI NGÀY & KIỂM KHO MÙ (EOD RECONCILIATION)
+    // =========================================================================
+    function computeEODVariance() {
+      const classA = state.inventoryItems.filter(i => i.abc === 'A');
+      return classA.map(item => {
+        const inp = state.eodDraft.inputs[item.id] || { sealed: 0, grossG: 0 };
+        // Tính tồn thực tế từ số hộp nguyên + cân vỏ chai (tare_weight_g)
+        const openNet = item.unit === 'pcs'
+          ? (parseFloat(inp.grossG) || 0)
+          : Math.max(0, (parseFloat(inp.grossG) || 0) - item.tareG);
+        const counted = Math.round(((parseFloat(inp.sealed) || 0) * item.packFactor + openNet) * 1000) / 1000;
+
+        // Tổng hợp từ sổ cái stock_ledger (chỉ tính các lô còn hạn làm tồn lý thuyết tại quầy)
+        const theoretical = getValidStock(item.id);
+        const posUsage = state.stockLedger
+          .filter(l => l.itemId === item.id && l.txnType === 'POS_SALE')
+          .reduce((s, l) => s + Math.abs(l.qtyChange), 0);
+        const wasteQty = state.stockLedger
+          .filter(l => l.itemId === item.id && l.txnType === 'WASTE')
+          .reduce((s, l) => s + Math.abs(l.qtyChange), 0);
+
+        const variance = Math.round((counted - theoretical) * 1000) / 1000;
+        const denom = Math.max(posUsage, 1);
+        const pctUsage = posUsage > 0 ? Math.abs(variance) / denom * 100 : (Math.abs(variance) > 0 ? 100 : 0);
+        const vndLoss = variance < 0 ? Math.abs(variance) * item.avgCost : 0;
+
+        let alert = 'GREEN';
+        if (item.unit === 'pcs' && variance <= -3) alert = 'RED';
+        else if (pctUsage > 5) alert = 'RED';
+        else if (pctUsage >= 2) alert = 'YELLOW';
+
+        return { item, inp, counted, theoretical, posUsage, wasteQty, variance, pctUsage, vndLoss, alert };
+      });
+    }
+
+    function renderEOD() {
+      const rows = computeEODVariance();
+      const isOwner = state.currentRole === 'OWNER';
+      const showResults = isOwner && state.eodDraft.submitted;
+
+      return `
+        <div class="mb-5 p-4 rounded-xl ${isOwner ? 'bg-indigo-50 border-indigo-200 text-indigo-900' : 'bg-slate-900 text-white'} border flex flex-wrap items-center justify-between gap-3">
+          <div class="text-sm">
+            ${isOwner
+              ? `<b>👁️ Chế độ Chủ quán (Đối soát hậu kiểm):</b> ${state.eodDraft.submitted ? `Đã nhận phiếu kiểm mù từ <b>${state.eodDraft.submittedBy}</b> lúc ${state.eodDraft.submittedAt}. Dưới đây là kết quả đối chiếu tự động với Sổ cái.` : 'Nhân viên ca tối chưa nộp phiếu kiểm kho mù. Bạn có thể tự nhập hoặc chuyển sang vai trò Quản lý ca để kiểm thử quy trình kiểm mù.'}`
+              : `<b>🙈 CHẾ ĐỘ KIỂM KHO MÙ (BLIND COUNT):</b> Hệ thống đang ẩn hoàn toàn cột <i>Tồn lý thuyết</i> và <i>Chênh lệch</i>. Chỉ cần nhập số hộp nguyên và cân tổng cả chai (máy tự trừ trọng lượng vỏ rỗng).`}
+          </div>
+          ${!state.eodDraft.submitted ? `<button onclick="submitEODBlindCount()" class="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-lg shrink-0">Khóa & Nộp phiếu Kiểm kho</button>`
+            : `<button onclick="reopenEOD()" class="px-3.5 py-2 bg-white border border-slate-300 text-slate-700 font-bold text-xs rounded-lg shrink-0">Mở kiểm lại (Demo)</button>`}
+        </div>
+
+        <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div class="px-5 py-3.5 border-b border-slate-200 font-bold text-slate-900">Danh mục kiểm kho Nhóm A (5 phút cuối ngày)</div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm text-left">
+              <thead class="text-xs uppercase bg-slate-50 text-slate-500">
+                <tr>
+                  <th class="px-4 py-2.5">Nguyên liệu Nhóm A</th>
+                  <th class="px-4 py-2.5">Số hộp/cây nguyên</th>
+                  <th class="px-4 py-2.5">Cân tổng cả vỏ (g) / Lẻ</th>
+                  <th class="px-4 py-2.5 text-right">Thực tế quy đổi</th>
+                  ${showResults ? `
+                    <th class="px-4 py-2.5 text-right">Tồn lý thuyết</th>
+                    <th class="px-4 py-2.5 text-right">Chênh lệch</th>
+                    <th class="px-4 py-2.5 text-right">% / Tiêu hao</th>
+                    <th class="px-4 py-2.5 text-center">Cảnh báo</th>
+                  ` : ''}
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                ${rows.map(r => {
+                  const badgeCls = r.alert === 'RED' ? 'bg-rose-600 text-white' : r.alert === 'YELLOW' ? 'bg-amber-400 text-slate-950' : 'bg-emerald-100 text-emerald-800';
+                  return `
+                    <tr>
+                      <td class="px-4 py-3">
+                        <div class="font-bold text-slate-800">${r.item.name}</div>
+                        <div class="text-[11px] text-slate-400">${r.item.packName} = ${num(r.item.packFactor)} ${r.item.unit}${r.item.tareG > 0 ? ` • Vỏ rỗng: ${r.item.tareG}g` : ''}</div>
+                      </td>
+                      <td class="px-4 py-3">
+                        <input type="number" min="0" ${state.eodDraft.submitted ? 'disabled' : ''} value="${r.inp.sealed}"
+                          onchange="updateEODInput('${r.item.id}', 'sealed', this.value)"
+                          class="w-20 border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm font-semibold" />
+                        <span class="text-xs text-slate-400 ml-1">${r.item.packName}</span>
+                      </td>
+                      <td class="px-4 py-3">
+                        <input type="number" min="0" ${state.eodDraft.submitted ? 'disabled' : ''} value="${r.inp.grossG}"
+                          onchange="updateEODInput('${r.item.id}', 'grossG', this.value)"
+                          class="w-24 border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm font-semibold" />
+                        <span class="text-xs text-slate-400 ml-1">${r.item.unit === 'pcs' ? 'ly lẻ' : 'g (tổng)'}</span>
+                      </td>
+                      <td class="px-4 py-3 text-right font-bold text-slate-900">${num(r.counted)} ${r.item.unit}</td>
+                      ${showResults ? `
+                        <td class="px-4 py-3 text-right text-slate-600">${num(r.theoretical)} ${r.item.unit}</td>
+                        <td class="px-4 py-3 text-right font-bold ${r.variance < 0 ? 'text-rose-600' : r.variance > 0 ? 'text-amber-600' : 'text-emerald-600'}">
+                          ${r.variance > 0 ? '+' : ''}${num(r.variance)} ${r.item.unit}
+                          ${r.vndLoss > 0 ? `<div class="text-[11px] font-normal">-${vnd(r.vndLoss)}</div>` : ''}
+                        </td>
+                        <td class="px-4 py-3 text-right font-mono text-xs">${r.posUsage > 0 ? r.pctUsage.toFixed(1) + '%' : (r.variance === 0 ? '0%' : 'Chưa bán')}</td>
+                        <td class="px-4 py-3 text-center">
+                          <span class="text-[11px] font-bold px-2.5 py-1 rounded-full ${badgeCls}">${r.alert === 'RED' ? 'ĐỎ • BÁO ĐỘNG' : r.alert === 'YELLOW' ? 'VÀNG • THEO DÕI' : 'XANH • AN TOÀN'}</span>
+                          ${r.variance > 0 && r.alert !== 'GREEN' ? '<div class="text-[10px] text-amber-700 mt-0.5">Dư bất thường (pha thiếu?)</div>' : ''}
+                          ${r.item.unit === 'pcs' && r.variance <= -3 ? '<div class="text-[10px] text-rose-700 font-bold mt-0.5">Nghi vấn bán ngoài POS!</div>' : ''}
+                        </td>
+                      ` : ''}
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    function updateEODInput(itemId, field, val) {
+      if (!state.eodDraft.inputs[itemId]) state.eodDraft.inputs[itemId] = { sealed: 0, grossG: 0 };
+      state.eodDraft.inputs[itemId][field] = Math.max(0, parseFloat(val) || 0);
+      renderAll();
+    }
+
+    function submitEODBlindCount() {
+      state.eodDraft.submitted = true;
+      state.eodDraft.submittedBy = ROLES[state.currentRole].name;
+      state.eodDraft.submittedAt = fmtTime();
+      const reds = computeEODVariance().filter(r => r.alert === 'RED');
+      logAudit('EOD_BLIND_SUBMIT', `Nộp kiểm kho mù cuối ngày (${reds.length} mục chạm Cờ Đỏ)`);
+      if (state.currentRole === 'OWNER') {
+        showToast('📊 Đã chạy động cơ đối soát EOD', `Phát hiện ${reds.length} cảnh báo đỏ trên danh mục Nhóm A.`, reds.length ? 'danger' : 'success');
+      } else {
+        showToast('✅ Đã nộp phiếu kiểm kho mù', 'Kết quả chênh lệch đã được khóa và gửi trực tiếp về Chủ quán. Hãy chuyển sang vai trò Chủ quán để xem!', 'success');
+      }
+      renderAll();
+    }
+
+    function reopenEOD() {
+      state.eodDraft.submitted = false;
+      renderAll();
+    }
+
+    // =========================================================================
+    // 9. VIEW 6: NHÂN SỰ, CHỐT KÉT MÙ & AUDIT LOG
+    // =========================================================================
+    function renderHR() {
+      const cashSales = state.orders.filter(o => o.status === 'PAID' && o.method === 'CASH').reduce((s, o) => s + o.total, 0);
+      const expectedCash = state.shiftCash.openingCash + cashSales;
+      const isOwner = state.currentRole === 'OWNER';
+
+      return `
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+          <!-- Chấm công GPS + Wi-Fi -->
+          <div class="bg-white rounded-xl border border-slate-200 p-5">
+            <div class="flex items-center justify-between mb-3">
+              <h2 class="font-bold text-slate-900">Chấm công Ca Chiều (GPS + Wi-Fi BSSID)</h2>
+              <button onclick="clockInSelf()" class="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg">Chấm công ngay</button>
+            </div>
+            <div class="space-y-2 text-xs">
+              ${state.attendance.map(a => `
+                <div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between">
+                  <div>
+                    <div class="font-bold text-slate-800">${a.name} <span class="font-normal text-slate-500">(${a.role})</span></div>
+                    <div class="text-slate-500 mt-0.5">${a.wifi} • GPS: ${a.gps}</div>
+                  </div>
+                  <div class="text-right">
+                    <div class="font-bold text-emerald-700">${a.timeIn}</div>
+                    <div class="text-[11px] text-emerald-600">✓ ${a.status}</div>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+
+          <!-- Chốt két mù -->
+          <div class="bg-white rounded-xl border border-slate-200 p-5">
+            <h2 class="font-bold text-slate-900 mb-2">Chốt két tiền cuối ca (Blind Close-out)</h2>
+            <p class="text-xs text-slate-500 mb-4">Quỹ đầu ca: <b>${vnd(state.shiftCash.openingCash)}</b>. ${isOwner ? `Tiền mặt kỳ vọng hiện tại (chỉ Chủ thấy): <b class="text-indigo-700">${vnd(expectedCash)}</b>` : 'Hệ thống ẩn tổng tiền mặt bán được cho tới khi chốt sổ.'}</p>
+            ${['OWNER', 'MANAGER', 'CASHIER'].includes(state.currentRole) ? `
+              <div class="flex gap-2 items-center">
+                <input id="blind-cash-input" type="number" placeholder="Nhập tiền mặt đếm thực tế trong két" value="${state.shiftCash.blindCounted ?? ''}" class="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold" />
+                <button onclick="submitBlindCash()" class="px-4 py-2 bg-slate-900 text-white text-xs font-bold rounded-lg">Khóa két ca</button>
+              </div>
+              ${state.shiftCash.closed ? `
+                <div class="mt-3 p-3 rounded-lg text-xs ${isOwner ? (state.shiftCash.blindCounted - expectedCash === 0 ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800') : 'bg-slate-100 text-slate-700'}">
+                  ${isOwner
+                    ? `<b>Kết quả đối soát két:</b> Thực đếm ${vnd(state.shiftCash.blindCounted)} vs Kỳ vọng ${vnd(expectedCash)} → Chênh lệch: <b>${vnd(state.shiftCash.blindCounted - expectedCash)}</b>`
+                    : `✓ Đã ghi nhận số tiền thực đếm ${vnd(state.shiftCash.blindCounted)}. Kết quả thừa/thiếu đã gửi trực tiếp cho Chủ quán.`}
+                </div>
+              ` : ''}
+            ` : `<div class="text-xs text-slate-400 italic">Vai trò Barista không có quyền truy cập két tiền.</div>`}
+          </div>
+        </div>
+
+        <!-- Audit Log (Chỉ Owner được xem) -->
+        <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div class="px-5 py-3.5 border-b border-slate-200 font-bold text-slate-900 flex justify-between">
+            <span>Nhật ký hệ thống bất biến (audit_logs)</span>
+            <span class="text-xs font-normal text-slate-500">${isOwner ? 'Chỉ Chủ quán có quyền xem' : '🔒 Bị khóa theo RBAC'}</span>
+          </div>
+          ${isOwner ? `
+            <table class="w-full text-xs text-left">
+              <thead class="uppercase bg-slate-50 text-slate-500">
+                <tr><th class="px-4 py-2">Thời gian</th><th class="px-4 py-2">Hành động</th><th class="px-4 py-2">Người thực hiện</th><th class="px-4 py-2">PIN duyệt</th><th class="px-4 py-2">Chi tiết</th></tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                ${state.auditLogs.map(l => `
+                  <tr>
+                    <td class="px-4 py-2 text-slate-500">${l.time}</td>
+                    <td class="px-4 py-2 font-mono font-bold text-slate-800">${l.action}</td>
+                    <td class="px-4 py-2">${l.actor}</td>
+                    <td class="px-4 py-2 font-semibold text-indigo-700">${l.approver}</td>
+                    <td class="px-4 py-2">${l.detail}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          ` : `<div class="p-8 text-center text-sm text-slate-400">Vai trò <b>${ROLES[state.currentRole].label}</b> không có quyền đọc Nhật ký Audit Log. Hãy chuyển sang <b>Chủ quán</b> để kiểm tra.</div>`}
+        </div>
+      `;
+    }
+
+    function clockInSelf() {
+      const r = ROLES[state.currentRole];
+      state.attendance.unshift({
+        name: r.name, role: state.currentRole, timeIn: fmtTime(),
+        wifi: 'BSSID 8C:3B:AD:12:9F', gps: '10.9032, 106.7681', status: 'Hợp lệ (FaceID)'
+      });
+      showToast('✅ Chấm công thành công', `${r.name} đã xác thực Wi-Fi quán + GPS + ảnh mặt.`, 'success');
+      renderAll();
+    }
+
+    function submitBlindCash() {
+      const val = parseFloat(document.getElementById('blind-cash-input').value);
+      if (isNaN(val) || val < 0) return showToast('Số tiền không hợp lệ', 'Vui lòng nhập số tiền mặt thực đếm.', 'danger');
+      state.shiftCash.blindCounted = val;
+      state.shiftCash.closed = true;
+      logAudit('SHIFT_BLIND_CASH_CLOSE', `Chốt két mù cuối ca với số tiền thực đếm ${vnd(val)}`);
+      showToast('🔒 Đã khóa sổ két ca', 'Số liệu đã được gửi về báo cáo đối soát của Chủ quán.', 'success');
+      renderAll();
+    }
+
+    // =========================================================================
+    // 10. RENDER TỔNG & KHỞI CHẠY
+    // =========================================================================
+    function renderAll() {
+      renderSidebar();
+      const container = document.getElementById('main-content');
+      const views = {
+        dashboard: renderDashboard,
+        pos:       renderPOS,
+        inventory: renderInventory,
+        bom:       renderBOM,
+        eod:       renderEOD,
+        hr:        renderHR
+      };
+      container.innerHTML = (views[state.currentTab] || renderPOS)();
+      lucide.createIcons();
+    }
+
+    function resetDemoData() {
+      const prevRole = state.currentRole || 'OWNER';
+      const prevTab = state.currentTab || 'pos';
+      state = buildInitialState();
+      state.currentRole = prevRole;
+      state.currentTab = prevTab;
+      initLedgerFromBatches();
+      renderAll();
+      showToast('🔄 Đã nạp lại Seed Data chuẩn', 'Tất cả lô hàng FEFO, sổ cái và giỏ hàng đã về trạng thái ban đầu.', 'info');
+    }
+
+    document.getElementById('role-switcher').addEventListener('change', e => {
+      state.currentRole = e.target.value;
+      renderAll();
+      showToast(`Đang giả lập: ${ROLES[state.currentRole].label}`, ROLES[state.currentRole].hint, 'info');
+    });
+
+    // Boot
+    state = buildInitialState();
+    initLedgerFromBatches();
+    renderAll();
+  </script>
+</body>
+</html>

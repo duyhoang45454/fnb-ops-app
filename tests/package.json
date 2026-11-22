@@ -1,0 +1,14 @@
+{
+  "name": "fnb-ops-tests",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 *.test.js",
+    "test:db": "node --test --test-concurrency=1 01_db.test.js",
+    "test:api": "node --test --test-concurrency=1 02_api_pos.test.js 03_api_void_rbac.test.js 04_api_inventory.test.js 05_api_eod_hr.test.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}
